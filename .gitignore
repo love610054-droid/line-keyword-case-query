@@ -1,0 +1,5 @@
+.venv/
+.env
+data/group_mapping_local.json
+__pycache__/
+*.pyc

@@ -14,9 +14,9 @@ from data.sheet_sync import sheet_sync
 # 群組 ID → 通路名稱列表的快取
 _group_channel_cache: dict[str, List[str]] = {}
 
-# Antify 轉發規則快取（從 API 拉一次）
+# Antify 轉發規則快取（TTL 600 秒，可用 ANTIFY_RULES_TTL_SEC env 覆蓋）
 _antify_rules_cache: list[dict] = []
-_antify_rules_loaded: bool = False
+_antify_rules_loaded_at: float = 0.0
 
 # 數字 emoji 對照表（1–10）
 _NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
@@ -45,9 +45,19 @@ def verify_signature(body: bytes, signature: str, channel_secret: str) -> bool:
 
 
 def _load_antify_rules() -> list[dict]:
-    """從 Antify API 拉取轉發規則（快取，只拉一次）。"""
-    global _antify_rules_cache, _antify_rules_loaded
-    if _antify_rules_loaded:
+    """從 Antify API 拉取轉發規則（TTL 快取，預設 600 秒重載一次）。
+
+    若拉取失敗且舊快取存在，沿用舊快取避免功能中斷。
+    可用 env ANTIFY_RULES_TTL_SEC 覆蓋 TTL（秒）。
+    """
+    global _antify_rules_cache, _antify_rules_loaded_at
+    import time
+    try:
+        ttl = float(os.environ.get("ANTIFY_RULES_TTL_SEC", "600"))
+    except ValueError:
+        ttl = 600.0
+    now = time.time()
+    if _antify_rules_cache and (now - _antify_rules_loaded_at) < ttl:
         return _antify_rules_cache
 
     try:
@@ -59,12 +69,12 @@ def _load_antify_rules() -> list[dict]:
         if resp.status_code == 200:
             data = resp.json()
             _antify_rules_cache = [r for r in data.get("rules", []) if r.get("enabled")]
-            _antify_rules_loaded = True
-            log_print(f"[line_oa_webhook] 載入 {len(_antify_rules_cache)} 條 Antify 轉發規則")
+            _antify_rules_loaded_at = now
+            log_print(f"[line_oa_webhook] 載入 {len(_antify_rules_cache)} 條 Antify 轉發規則（TTL={int(ttl)}s）")
         else:
-            log_print(f"[line_oa_webhook] 拉取 Antify 規則失敗: {resp.status_code}")
+            log_print(f"[line_oa_webhook] 拉取 Antify 規則失敗: {resp.status_code}（沿用舊快取 {len(_antify_rules_cache)} 條）")
     except Exception as e:
-        log_print(f"[line_oa_webhook] 拉取 Antify 規則錯誤: {e}")
+        log_print(f"[line_oa_webhook] 拉取 Antify 規則錯誤: {e}（沿用舊快取 {len(_antify_rules_cache)} 條）")
 
     return _antify_rules_cache
 
